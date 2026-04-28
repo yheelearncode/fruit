@@ -1,6 +1,10 @@
 import './App.css';
+import { useState } from 'react';
 
 function App() {
+  const price = 33440;
+  const [count, setCount] = useState(1);
+  const totalPrice = price * count;
   return (
     <div className="page">
       <header className="header">
@@ -21,7 +25,19 @@ function App() {
              
             </p>
 
-            <p className="price">33,440원</p>
+            <p className="price">
+              {price}원
+            </p>
+
+            <div className="quantity-control">
+              <button onClick={() => setCount(count - 1)} disabled={count === 1}>-</button>
+              <span>{count}</span>
+              <button onClick={() => setCount(count + 1)}>+</button>
+            </div>
+              <p className="total-price">
+              합계: {totalPrice}원
+            </p>
+
           </div>
         </section>
       </main>
