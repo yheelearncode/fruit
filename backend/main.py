@@ -6,16 +6,18 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 
+from database import get_order as get_saved_order
+from database import get_product as get_saved_product
+from database import init_db, save_order
+
 
 app = FastAPI(title="Sejin Store API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",
         "http://localhost:5173",
         "http://localhost:5174",
-        "http://127.0.0.1:3000",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:5174",
     ],
@@ -23,29 +25,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-PRODUCTS = {
-    "berry-cream-dessert-box": {
-        "id": "berry-cream-dessert-box",
-        "name": "Berry Cream Dessert Box",
-        "subtitle": "Fresh dessert collection",
-        "origin": "Korea",
-        "maker": "Sejin Bakery Lab",
-        "series": "Daily Treat",
-        "price": 33440,
-        "original_price": 38000,
-        "discount_rate": 12,
-        "delivery_fee": 2500,
-        "free_delivery_minimum": 50000,
-        "options": {
-            "sizes": ["Small", "Regular", "Large"],
-            "add_ons": ["Gift wrapping", "Message card"],
-        },
-    }
-}
-
-orders: dict[str, dict] = {}
 
 
 class Product(BaseModel):
@@ -60,12 +39,11 @@ class Product(BaseModel):
     discount_rate: int
     delivery_fee: int
     free_delivery_minimum: int
-    options: dict[str, list[str]]
+    
 
 
 class Buyer(BaseModel):
     name: str = Field(min_length=1, max_length=80)
-    customs_id: str = Field(min_length=13, max_length=13)
     mobile: str = Field(min_length=10, max_length=20)
     email: str = Field(min_length=5, max_length=120)
 
@@ -91,8 +69,6 @@ class OrderItem(BaseModel):
     product_id: str
     quantity: int = Field(default=1, ge=1, le=20)
     size: Literal["Small", "Regular", "Large"]
-    add_ons: list[Literal["Gift wrapping", "Message card"]] = Field(default_factory=list)
-
 
 class Agreements(BaseModel):
     guest_privacy: bool
@@ -103,7 +79,7 @@ class Agreements(BaseModel):
         if not all((self.guest_privacy, self.privacy_policy, self.terms_of_service)):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="All required agreements must be accepted.",
+                detail="모든 필수 약관에 동의해야 합니다.",
             )
 
 
@@ -139,31 +115,28 @@ class OrderResponse(BaseModel):
     created_at: datetime
 
 
-class CustomsCheck(BaseModel):
-    name: str = Field(min_length=1, max_length=80)
-    mobile: str = Field(min_length=10, max_length=20)
-    address: str = Field(min_length=1, max_length=240)
-    customs_id: str = Field(min_length=13, max_length=13)
-
-
-class CustomsCheckResult(BaseModel):
-    valid: bool
-    message: str
-
 
 def calculate_totals(items: list[OrderItem]) -> OrderTotals:
     item_total = 0
+    product_delivery_fees: list[int] = []
+    free_delivery_minimums: list[int] = []
 
     for item in items:
-        product = PRODUCTS.get(item.product_id)
+        product = get_saved_product(item.product_id)
         if product is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Product '{item.product_id}' was not found.",
             )
         item_total += product["price"] * item.quantity
+        product_delivery_fees.append(product["delivery_fee"])
+        free_delivery_minimums.append(product["free_delivery_minimum"])
 
-    delivery_fee = 0 if item_total >= PRODUCTS["berry-cream-dessert-box"]["free_delivery_minimum"] else 2500
+    delivery_fee = (
+        0
+        if item_total >= max(free_delivery_minimums)
+        else max(product_delivery_fees)
+    )
     discount = 2000 if sum(item.quantity for item in items) >= 2 else 0
 
     return OrderTotals(
@@ -179,26 +152,18 @@ def health_check() -> dict[str, str]:
     return {"status": "ok", "service": "sejin-store-api"}
 
 
+@app.on_event("startup")
+def startup() -> None:
+    init_db()
+
+
 @app.get("/api/products/{product_id}", response_model=Product)
 def get_product(product_id: str) -> dict:
-    product = PRODUCTS.get(product_id)
+    product = get_saved_product(product_id)
     if product is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found.")
     return product
 
-
-@app.post("/api/customs/verify", response_model=CustomsCheckResult)
-def verify_customs_id(payload: CustomsCheck) -> CustomsCheckResult:
-    normalized = payload.customs_id.upper()
-    is_valid = normalized.startswith("P") and normalized[1:].isdigit()
-
-    if not is_valid:
-        return CustomsCheckResult(
-            valid=False,
-            message="Customs ID must start with P followed by 12 digits.",
-        )
-
-    return CustomsCheckResult(valid=True, message="Customs ID format is valid.")
 
 
 @app.post("/api/orders", response_model=OrderResponse, status_code=status.HTTP_201_CREATED)
@@ -217,13 +182,13 @@ def create_order(payload: OrderCreate) -> OrderResponse:
         created_at=datetime.now(timezone.utc),
     )
 
-    orders[order_id] = order.model_dump()
+    save_order(order.model_dump(mode="json"))
     return order
 
 
 @app.get("/api/orders/{order_id}", response_model=OrderResponse)
 def get_order(order_id: str) -> dict:
-    order = orders.get(order_id)
+    order = get_saved_order(order_id)
     if order is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found.")
     return order
