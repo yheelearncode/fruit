@@ -39,7 +39,7 @@ class Product(BaseModel):
     discount_rate: int
     delivery_fee: int
     free_delivery_minimum: int
-    
+    options: dict[str, list[str]]
 
 
 class Buyer(BaseModel):
@@ -69,6 +69,7 @@ class OrderItem(BaseModel):
     product_id: str
     quantity: int = Field(default=1, ge=1, le=20)
     size: Literal["Small", "Regular", "Large"]
+    add_ons: list[str] = Field(default_factory=list)
 
 class Agreements(BaseModel):
     guest_privacy: bool
